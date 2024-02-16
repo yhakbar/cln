@@ -8,7 +8,6 @@ edition = "2021"
 [dependencies]
 anyhow = "1.0.79"
 clap = { version = "4.5.0", features = ["derive"] }
-const_panic = "0.2.8"
 home = "0.5.9"
 rayon = "1.8.1"
 tempdir = "0.3.7"

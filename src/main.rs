@@ -108,8 +108,7 @@ impl TreeRow {
             .args(["cat-file", "-p", &self.name])
             .current_dir(repo_dir)
             .stdout(store_file)
-            .spawn()?
-            .wait()?;
+            .output()?;
         let mut stored_file_permissions = std::fs::Permissions::from_mode(self.mode.parse()?);
         stored_file_permissions.set_readonly(true);
         File::open(&store_path)?.set_permissions(stored_file_permissions)?;
@@ -148,27 +147,23 @@ impl Walkable for Tree {
                         .unwrap_or_else(|_| panic!("Failed to write {} to cln-store", row.name));
                     let cur_path = Path::new(self.path.as_str());
                     let target_dir = target_path.join(cur_path);
-                    if !target_dir.exists() {
-                        std::fs::create_dir_all(&target_dir).unwrap_or_else(|_| {
-                            panic!("Failed to create directory {}", target_dir.display())
-                        });
-                    }
+                    std::fs::create_dir_all(&target_dir).unwrap_or_else(|_| {
+                        panic!("Failed to create directory {}", target_dir.display())
+                    });
                     let target_file = target_dir.join(row.path.clone());
-                    if !target_file.exists() {
-                        std::fs::hard_link(
-                            get_cln_store_path().expect("Failed to get cln-store path")
-                                + "/"
-                                + &row.name,
-                            &target_file,
+                    std::fs::hard_link(
+                        get_cln_store_path().expect("Failed to get cln-store path")
+                            + "/"
+                            + &row.name,
+                        &target_file,
+                    )
+                    .unwrap_or_else(|_| {
+                        panic!(
+                            "Failed to hard link {} to {}",
+                            row.name,
+                            target_file.display()
                         )
-                        .unwrap_or_else(|_| {
-                            panic!(
-                                "Failed to hard link {} to {}",
-                                row.name,
-                                target_file.display()
-                            )
-                        });
-                    }
+                    });
                 }
                 "tree" => {
                     let cur_path = Path::new(self.path.as_str());
