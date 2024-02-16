@@ -61,6 +61,72 @@ fn get_cln_store_path() -> Result<String, Error> {
     }
 }
 
+struct LsRemoteRow {
+    hash: String,
+    name: String,
+}
+
+impl LsRemoteRow {
+    fn new(row: &str) -> Self {
+        let mut row_iter = row.split_whitespace();
+        let hash = row_iter
+            .next()
+            .expect("Failed to find hash in LsRemoteRow")
+            .to_string();
+        let name = row_iter.collect::<Vec<&str>>().join(" ");
+        Self { hash, name }
+    }
+}
+
+struct LsRemote {
+    rows: Vec<LsRemoteRow>,
+}
+
+impl LsRemote {
+    fn new(ls_remote: &str, reference: &str) -> Self {
+        let rows = ls_remote
+            .lines()
+            .par_bridge()
+            .map(LsRemoteRow::new)
+            .filter(|row| {
+                if row.name == reference {
+                    return true;
+                }
+                if row.name == format!("refs/tags/{reference}") {
+                    return true;
+                }
+                if row.name == format!("refs/heads/{reference}") {
+                    return true;
+                }
+                false
+            })
+            .collect::<Vec<LsRemoteRow>>();
+        Self { rows }
+    }
+    fn get_hash(&self) -> Result<String, Error> {
+        if self.rows.is_empty() {
+            return Err(anyhow::anyhow!("No matching reference found"));
+        }
+        Ok(self.rows[0].hash.clone())
+    }
+}
+
+fn run_ls_remote(repo: &str, reference: &str) -> Result<LsRemote, Error> {
+    let output = Command::new("git")
+        .args(["ls-remote", repo, reference])
+        .output()?;
+    let stdout = String::from_utf8(output.stdout)?;
+    let stdout = stdout.trim_end();
+    Ok(LsRemote::new(stdout, reference))
+}
+
+fn is_content_in_store(hash: &str) -> Result<bool, Error> {
+    let store_root = get_cln_store_path()?;
+    let store_root_path = Path::new(&store_root);
+    let store_path = store_root_path.join(hash);
+    Ok(store_path.exists())
+}
+
 // Struct for parsing the rows of stdout from the `git ls-tree` command
 struct TreeRow {
     mode: String,
@@ -129,21 +195,34 @@ impl Tree {
             .collect::<Vec<TreeRow>>();
         Self { rows, path }
     }
+    fn from_path(store_path: &Path, path: String) -> Result<Self, Error> {
+        let tree = std::fs::read_to_string(store_path)?;
+        let tree = tree.trim_end();
+        Ok(Self::new(tree, path))
+    }
+    fn from_hash(hash: &str, path: String) -> Result<Self, Error> {
+        let store_root = get_cln_store_path()?;
+        let store_root_path = Path::new(&store_root);
+        let store_path = store_root_path.join(hash);
+        Self::from_path(&store_path, path)
+    }
 }
+
+type RepoPath = Path;
 
 trait Walkable {
-    fn walk(&self, path: &RepoPath, target_path: &Path);
+    fn walk(&self, tree: &Tree, target_path: &Path);
 }
 
-impl Walkable for Tree {
-    fn walk(&self, path: &RepoPath, target_path: &Path) {
-        self.rows
+impl Walkable for RepoPath {
+    fn walk(&self, tree: &Tree, target_path: &Path) {
+        tree.rows
             .par_iter()
             .for_each(|row| match row.otype.as_str() {
                 "blob" => {
-                    row.write_to_store(path)
+                    row.write_to_store(self)
                         .unwrap_or_else(|_| panic!("Failed to write {} to cln-store", row.name));
-                    let cur_path = Path::new(self.path.as_str());
+                    let cur_path = Self::new(tree.path.as_str());
                     let target_dir = target_path.join(cur_path);
                     if !target_dir.exists() {
                         std::fs::create_dir_all(&target_dir).unwrap_or_else(|_| {
@@ -169,27 +248,78 @@ impl Walkable for Tree {
                     });
                 }
                 "tree" => {
-                    let cur_path = Path::new(self.path.as_str());
+                    let cur_path = Self::new(tree.path.as_str());
                     let new_path = cur_path.join(row.path.clone());
-                    let next_tree = path
+                    let next_tree = self
                         .ls_tree(&row.name, new_path.display().to_string())
                         .unwrap_or_else(|_| panic!("Failed to `git ls-tree {}`", row.name));
-                    next_tree.walk(path, target_path);
+                    self.walk(&next_tree, target_path);
                 }
                 _ => {}
             });
     }
 }
 
-type RepoPath = Path;
+type Hash = String;
+
+impl Walkable for Hash {
+    fn walk(&self, tree: &Tree, target_path: &Path) {
+        let cln_store = get_cln_store_path().expect("Failed to get cln-store path");
+        tree.rows
+            .par_iter()
+            .for_each(|row| match row.otype.as_str() {
+                "blob" => {
+                    let cur_path = Path::new(tree.path.as_str());
+                    let target_dir = target_path.join(cur_path);
+                    if !target_dir.exists() {
+                        std::fs::create_dir_all(&target_dir).unwrap_or_else(|_| {
+                            panic!("Failed to create directory {}", target_dir.display())
+                        });
+                    }
+                    let target_file = target_dir.join(row.path.clone());
+                    if target_file.exists() {
+                        return;
+                    }
+                    std::fs::hard_link(cln_store.clone() + "/" + &row.name, &target_file)
+                        .unwrap_or_else(|_| {
+                            panic!(
+                                "Failed to hard link {} to {}",
+                                row.name,
+                                target_file.display()
+                            )
+                        });
+                }
+                "tree" => {
+                    let cur_path = Path::new(tree.path.as_str());
+                    let new_path = cur_path.join(row.path.clone());
+                    let next_tree = Tree::from_path(
+                        &Path::new(&cln_store).join(&row.name),
+                        new_path.display().to_string(),
+                    )
+                    .unwrap_or_else(|_| panic!("Failed to read tree {}", row.name));
+                    self.walk(&next_tree, target_path);
+                }
+                _ => {}
+            });
+    }
+}
 
 trait Treevarsable {
     fn ls_tree(&self, reference: &str, path: String) -> Result<Tree, Error>;
-    fn ls_head_tree(&self) -> Result<Tree, Error>;
 }
+
+const HEAD: &str = "HEAD";
 
 impl Treevarsable for RepoPath {
     fn ls_tree(&self, reference: &str, path: String) -> Result<Tree, Error> {
+        let cln_store = get_cln_store_path()?;
+
+        let store_path = Self::new(&cln_store).join(reference);
+
+        if store_path.exists() {
+            return Ok(Tree::new(&std::fs::read_to_string(&store_path)?, path));
+        }
+
         let ls_tree_stdout = Command::new("git")
             .args(["ls-tree", reference])
             .current_dir(self)
@@ -197,10 +327,10 @@ impl Treevarsable for RepoPath {
             .stdout;
         let ls_tree_string = String::from_utf8_lossy(&ls_tree_stdout);
         let ls_tree_trimmed = ls_tree_string.trim_end().to_string();
+
+        std::fs::write(&store_path, &ls_tree_trimmed)?;
+
         Ok(Tree::new(&ls_tree_trimmed, path))
-    }
-    fn ls_head_tree(&self) -> Result<Tree, Error> {
-        self.ls_tree("HEAD^{tree}", ".".to_string())
     }
 }
 
@@ -216,17 +346,23 @@ fn main() -> Result<(), Error> {
     let args = ClnArgs::parse();
 
     let target_dir = if let Some(dir) = &args.dir {
-        if dir.contains('/') {
-            anyhow::bail!("Target directory cannot contain a slash (/) character.");
-        }
-
         dir.to_string()
     } else {
         get_repo_name(&args.repo)
     };
 
-    if Path::new(&target_dir).exists() {
-        anyhow::bail!("Target directory {} already exists.", target_dir);
+    let remote_ref = args.branch.as_ref().map_or(HEAD, |branch| branch.as_str());
+    let ls_remote = run_ls_remote(&args.repo, remote_ref)?;
+    let ls_remote_hash = ls_remote.get_hash()?;
+
+    if is_content_in_store(&ls_remote_hash)? {
+        let head_tree = Tree::from_hash(&ls_remote_hash, ".".to_string())?;
+        if !Path::new(&target_dir).exists() {
+            std::fs::create_dir(&target_dir)?;
+        }
+        ls_remote_hash.walk(&head_tree, Path::new(&target_dir));
+
+        return Ok(());
     }
 
     let tmp_dir = create_temp_dir()?;
@@ -234,11 +370,14 @@ fn main() -> Result<(), Error> {
 
     clone_repo(&args.repo, tmp_dir_path, args.branch.as_deref())?;
 
-    std::fs::create_dir_all(&target_dir)?;
+    let head_tree = tmp_dir_path.ls_tree(&ls_remote_hash, ".".to_string())?;
 
-    let head_tree = tmp_dir_path.ls_head_tree()?;
-    head_tree.walk(tmp_dir_path, Path::new(&target_dir));
+    if !Path::new(&target_dir).exists() {
+        std::fs::create_dir(&target_dir)?;
+    }
+    tmp_dir_path.walk(&head_tree, Path::new(&target_dir));
 
     tmp_dir.close()?;
+
     Ok(())
 }
