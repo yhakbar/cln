@@ -151,6 +151,9 @@ impl Walkable for Tree {
                         panic!("Failed to create directory {}", target_dir.display())
                     });
                     let target_file = target_dir.join(row.path.clone());
+                    if target_file.exists() {
+                        return;
+                    }
                     std::fs::hard_link(
                         get_cln_store_path().expect("Failed to get cln-store path")
                             + "/"
@@ -225,8 +228,6 @@ fn main() -> Result<(), Error> {
     if Path::new(&target_dir).exists() {
         anyhow::bail!("Target directory {} already exists.", target_dir);
     }
-
-    std::fs::create_dir_all(&target_dir)?;
 
     let tmp_dir = create_temp_dir(args.dir)?;
     let tmp_dir_path = tmp_dir.path();
