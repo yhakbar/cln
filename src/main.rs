@@ -1,6 +1,7 @@
 use anyhow::Error;
 use clap::Parser;
 use home::home_dir;
+use rayon::prelude::*;
 use std::fs::File;
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
@@ -58,7 +59,7 @@ fn get_cln_store_path() -> Result<String, Error> {
         }
         Ok(cln_store.display().to_string())
     } else {
-        anyhow::bail!("Could not find home directory");
+        Err(anyhow::anyhow!("Could not find home directory"))
     }
 }
 
@@ -124,7 +125,11 @@ struct Tree {
 
 impl Tree {
     fn new(tree: &str, path: String) -> Self {
-        let rows = tree.lines().map(TreeRow::new).collect::<Vec<TreeRow>>();
+        let rows = tree
+            .lines()
+            .par_bridge()
+            .map(TreeRow::new)
+            .collect::<Vec<TreeRow>>();
         Self { rows, path }
     }
 }
@@ -135,44 +140,46 @@ trait Walkable {
 
 impl Walkable for Tree {
     fn walk(&self, path: &RepoPath, target_path: &Path) {
-        self.rows.iter().for_each(|row| match row.otype.as_str() {
-            "blob" => {
-                row.write_to_store(path)
-                    .unwrap_or_else(|_| panic!("Failed to write {} to cln-store", row.name));
-                let cur_path = Path::new(self.path.as_str());
-                let target_dir = target_path.join(cur_path);
-                if !target_dir.exists() {
-                    std::fs::create_dir_all(&target_dir).unwrap_or_else(|_| {
-                        panic!("Failed to create directory {}", target_dir.display())
-                    });
-                }
-                let target_file = target_dir.join(row.path.clone());
-                if !target_file.exists() {
-                    std::fs::hard_link(
-                        get_cln_store_path().expect("Failed to get cln-store path")
-                            + "/"
-                            + &row.name,
-                        &target_file,
-                    )
-                    .unwrap_or_else(|_| {
-                        panic!(
-                            "Failed to hard link {} to {}",
-                            row.name,
-                            target_file.display()
+        self.rows
+            .par_iter()
+            .for_each(|row| match row.otype.as_str() {
+                "blob" => {
+                    row.write_to_store(path)
+                        .unwrap_or_else(|_| panic!("Failed to write {} to cln-store", row.name));
+                    let cur_path = Path::new(self.path.as_str());
+                    let target_dir = target_path.join(cur_path);
+                    if !target_dir.exists() {
+                        std::fs::create_dir_all(&target_dir).unwrap_or_else(|_| {
+                            panic!("Failed to create directory {}", target_dir.display())
+                        });
+                    }
+                    let target_file = target_dir.join(row.path.clone());
+                    if !target_file.exists() {
+                        std::fs::hard_link(
+                            get_cln_store_path().expect("Failed to get cln-store path")
+                                + "/"
+                                + &row.name,
+                            &target_file,
                         )
-                    });
+                        .unwrap_or_else(|_| {
+                            panic!(
+                                "Failed to hard link {} to {}",
+                                row.name,
+                                target_file.display()
+                            )
+                        });
+                    }
                 }
-            }
-            "tree" => {
-                let cur_path = Path::new(self.path.as_str());
-                let new_path = cur_path.join(row.path.clone());
-                let next_tree = path
-                    .ls_tree(&row.name, new_path.display().to_string())
-                    .unwrap_or_else(|_| panic!("Failed to `git ls-tree {}`", row.name));
-                next_tree.walk(path, target_path);
-            }
-            _ => {}
-        });
+                "tree" => {
+                    let cur_path = Path::new(self.path.as_str());
+                    let new_path = cur_path.join(row.path.clone());
+                    let next_tree = path
+                        .ls_tree(&row.name, new_path.display().to_string())
+                        .unwrap_or_else(|_| panic!("Failed to `git ls-tree {}`", row.name));
+                    next_tree.walk(path, target_path);
+                }
+                _ => {}
+            });
     }
 }
 

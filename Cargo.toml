@@ -20,9 +20,6 @@ lto = true
 codegen-units = 1
 panic = "abort"
 
-[package.metadata.cargo-machete]
-ignored = ["rayon", "const_panic"]
-
 [lints.rust]
 unsafe_code = "forbid"
 
