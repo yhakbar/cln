@@ -25,10 +25,8 @@ struct ClnArgs {
     branch: Option<String>,
 }
 
-fn create_temp_dir(dir: Option<String>) -> Result<TempDir, Error> {
-    let tmp_dir_name = dir.map_or_else(|| "cln".to_string(), |dir| format!("{}-{}", "cln", dir));
-
-    let tempdir = TempDir::new(&tmp_dir_name)?;
+fn create_temp_dir() -> Result<TempDir, Error> {
+    let tempdir = TempDir::new("cln")?;
 
     Ok(tempdir)
 }
@@ -147,9 +145,11 @@ impl Walkable for Tree {
                         .unwrap_or_else(|_| panic!("Failed to write {} to cln-store", row.name));
                     let cur_path = Path::new(self.path.as_str());
                     let target_dir = target_path.join(cur_path);
-                    std::fs::create_dir_all(&target_dir).unwrap_or_else(|_| {
-                        panic!("Failed to create directory {}", target_dir.display())
-                    });
+                    if !target_dir.exists() {
+                        std::fs::create_dir_all(&target_dir).unwrap_or_else(|_| {
+                            panic!("Failed to create directory {}", target_dir.display())
+                        });
+                    }
                     let target_file = target_dir.join(row.path.clone());
                     if target_file.exists() {
                         return;
@@ -229,10 +229,12 @@ fn main() -> Result<(), Error> {
         anyhow::bail!("Target directory {} already exists.", target_dir);
     }
 
-    let tmp_dir = create_temp_dir(args.dir)?;
+    let tmp_dir = create_temp_dir()?;
     let tmp_dir_path = tmp_dir.path();
 
     clone_repo(&args.repo, tmp_dir_path, args.branch.as_deref())?;
+
+    std::fs::create_dir_all(&target_dir)?;
 
     let head_tree = tmp_dir_path.ls_head_tree()?;
     head_tree.walk(tmp_dir_path, Path::new(&target_dir));
