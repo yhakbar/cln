@@ -8,13 +8,26 @@ edition = "2021"
 [dependencies]
 anyhow = "1.0.79"
 clap = { version = "4.5.0", features = ["derive"] }
+const_panic = "0.2.8"
 home = "0.5.9"
 rayon = "1.8.1"
 tempdir = "0.3.7"
 
 [profile.release]
+opt-level = 3
 strip = true
 lto = true
 codegen-units = 1
 panic = "abort"
-opt-level = 3
+
+[package.metadata.cargo-machete]
+ignored = ["rayon", "const_panic"]
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+# enum_glob_use = "forbid"
+pedantic = "deny"
+nursery = "deny"
+unwrap_used = "deny"
