@@ -88,17 +88,11 @@ impl LsRemote {
             .lines()
             .par_bridge()
             .map(LsRemoteRow::new)
-            .filter(|row| {
-                if row.name == reference {
-                    return true;
-                }
-                if row.name == format!("refs/tags/{reference}") {
-                    return true;
-                }
-                if row.name == format!("refs/heads/{reference}") {
-                    return true;
-                }
-                false
+            .filter(|row| match row.name.as_str() {
+                _ if row.name == reference => true,
+                _ if row.name == format!("refs/tags/{reference}") => true,
+                _ if row.name == format!("refs/heads/{reference}") => true,
+                _ => false,
             })
             .collect::<Vec<LsRemoteRow>>();
         Self { rows }
