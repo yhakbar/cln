@@ -10,6 +10,10 @@ It works by:
 
 ## Installation
 
+You need [rust installed](https://www.rust-lang.org/tools/install) fisrt.
+
+Then run the following in this repo:
+
 ```bash
 cargo install --path .
 ```
@@ -48,11 +52,21 @@ An optimization that `cln` takes is to run `git ls-remote` to get the object has
 
 If `HEAD` moves or a different ref is selected, `cln` will still have to perform a bare clone of the repo to update the local store, but it only has to update the local store with the new objects, and not the entire repo.
 
+### Advantages
+
+- **Speed**: Once the local store is populated, `cln` can clone a repo in a fraction of the time it takes to clone a repo with `git clone`, as it only has to make a small network request to determine if the local store is up to date, then create a new working directory linked to the local store.
+- **Disk Space**: The local store is a content-addressable store, so if you have multiple clones of the same repo, they will share the same objects, saving disk space. This is especially useful if repos share identical content, such as when using multiple branches of the same repo.
+
+### Disadvantages
+
+- **Read-Only**: The local store is read-only, so you can't make changes to the repo. This is required, as the local store is a content-addressable store, and changing the contents of the store would invalidate the hash of the objects, breaking the ability to link to them reliably. `cln` is also expected to be used in a context where multiple clones of the same repo are made, so it's important that the local store is immutable.
+- **Initial Clone**: The initial clone of a repo is going to be slower than a `git clone` because `cln` has to do a lot more work to setup the permanent local store. It's assumed that you'll be cloning the same repo multiple times when using `cln`, however, so the initial clone and store creation time is amortized over multiple clones.
+
 ## Benchmarks
 
 The following are very unscientific benchmarks run on my underpowered M1 Air laptop, comparing the time it takes to clone a repo using a minimal `git clone` command vs `cln`.
 
-Note that the initial `cln` clone is going to be a lot slower than a `git clone` because it has to do a lot more work to setup the permanent local store. It's assumed that you'll be cloning the same repo multiple times when using `cln`, however, so the initial clone and store creation time is amortized over multiple clones.
+Note that the initial `cln` clone is skipped due to the `--warmup` flag.
 
 ### Small Repo
 
@@ -116,3 +130,8 @@ Benchmark 1: tmp="$(mktemp -d)" && cln https://github.com/torvalds/linux "$tmp" 
   Time (mean ± σ):     21.006 s ±  0.128 s    [User: 0.034 s, System: 4.358 s]
   Range (min … max):   20.840 s … 21.249 s    10 runs
 ```
+
+## Known Issues
+
+- `cln` doesn't support using a specific commit of a repo. This is because `cln` uses `git ls-remote` to determine the object hash of the `HEAD` of the remote repository, and then uses `git clone --bare --depth 1 --single-branch` to clone the repo. Both of these commands don't support working with a specific commit, so the only feasible way to handle this is to fully clone the repo, then checkout the specific commit. That would defeat the purpose of using `cln` in the first place, so it's not supported.
+- Distribution isn't setup. This is a toy project, so I'm not going to spend time setting up a release process for it. If you want to use it, you'll have to clone the repo and build it yourself.
