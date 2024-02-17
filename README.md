@@ -1,6 +1,6 @@
 # Cln
 
-A fun little experiment for a git client that clones a git repo, then generates a local directory via links.
+A fun little experiment for a tool that clones a git repo, then generates a local directory via links to a persisted content addressable store (CAS).
 
 It works by:
 
