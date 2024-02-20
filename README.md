@@ -43,7 +43,7 @@ Does the following:
 Removing the repo, then re-cloning it should be much faster:
 
 ```bash
-$ cln git@github.com:yhakbar/cln.git
+cln git@github.com:yhakbar/cln.git
 ```
 
 ## Why?

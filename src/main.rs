@@ -375,3 +375,70 @@ fn main() -> Result<(), Error> {
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use assert_cmd::Command;
+
+    fn cln() -> Command {
+        Command::cargo_bin(env!("CARGO_PKG_NAME")).expect("Error invoking cln")
+    }
+
+    #[test]
+    fn test_create_temp_dir() {
+        let tempdir = create_temp_dir().unwrap();
+        assert!(tempdir.path().exists());
+        tempdir.close().unwrap();
+    }
+
+    #[test]
+    fn test_get_cln_store_path() {
+        let cln_store = get_cln_store_path().unwrap();
+        assert!(Path::new(&cln_store).exists());
+    }
+
+    #[test]
+    fn test_run_ls_remote() {
+        let repo = "https://github.com/lua/lua.git";
+        let reference = "HEAD";
+        let ls_remote = run_ls_remote(repo, reference).unwrap();
+        assert!(!ls_remote.rows.is_empty());
+    }
+
+    #[test]
+    fn test_cln_and_git_clone_are_equivalent() {
+        let repo = "https://github.com/lua/lua.git";
+
+        let cln_dir = create_temp_dir().unwrap();
+        let git_dir = create_temp_dir().unwrap();
+
+        cln().args(&[repo, cln_dir.path().to_str().unwrap()]).assert().success();
+        Command::new("git")
+            .args(["clone", repo, git_dir.path().to_str().unwrap()])
+            .assert()
+            .success();
+
+        for entry in git_dir.path().read_dir().unwrap() {
+            let entry = entry.unwrap();
+            let entry_path = entry.path();
+            let entry_name = entry_path.file_name().unwrap().to_str().unwrap();
+            let cln_entry_path = cln_dir.path().join(entry_name);
+            if entry_name == ".git" {
+                continue;
+            }
+            assert!(cln_entry_path.exists());
+        }
+
+        for entry in cln_dir.path().read_dir().unwrap() {
+            let entry = entry.unwrap();
+            let entry_path = entry.path();
+            let entry_name = entry_path.file_name().unwrap().to_str().unwrap();
+            let git_entry_path = git_dir.path().join(entry_name);
+            assert!(git_entry_path.exists());
+        }
+
+        cln_dir.close().unwrap();
+        git_dir.close().unwrap();
+    }
+}

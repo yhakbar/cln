@@ -27,3 +27,6 @@ unsafe_code = "forbid"
 pedantic = "deny"
 nursery = "deny"
 unwrap_used = "deny"
+
+[dev-dependencies]
+assert_cmd = "2.0.14"
