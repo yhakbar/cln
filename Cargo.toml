@@ -2,6 +2,13 @@
 resolver = "2"
 members = [
   "bin",
-  # "cln",
+  "cln",
 ]
+
+[profile.release]
+opt-level = 3
+strip = true
+lto = true
+codegen-units = 1
+panic = "abort"
 
