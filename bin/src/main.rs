@@ -1,3 +1,9 @@
+extern crate anyhow;
+extern crate clap;
+extern crate home;
+extern crate rayon;
+extern crate tempfile;
+
 use anyhow::Error;
 use clap::Parser;
 use home::home_dir;
@@ -375,8 +381,10 @@ fn main() -> Result<(), Error> {
 
 #[cfg(test)]
 mod tests {
+    extern crate assert_cmd;
+
+    use self::assert_cmd::Command;
     use super::*;
-    use assert_cmd::Command;
 
     fn cln() -> Command {
         Command::cargo_bin(env!("CARGO_PKG_NAME")).expect("Error invoking cln")

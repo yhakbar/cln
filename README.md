@@ -15,7 +15,7 @@ You need [rust installed](https://www.rust-lang.org/tools/install) fisrt.
 Then run the following in this repo:
 
 ```bash
-cargo install --path .
+cargo install --path bin
 ```
 
 ## Usage
