@@ -2,11 +2,8 @@ use anyhow::Error;
 use clap::Parser;
 use home::home_dir;
 use rayon::prelude::*;
-use std::fs::File;
-use std::os::unix::fs::PermissionsExt;
-use std::path::Path;
-use std::process::Command;
-use tempdir::TempDir;
+use std::{fs::File, os::unix::fs::PermissionsExt, path::Path, process::Command};
+use tempfile::{Builder, TempDir};
 
 /// Git clone client with a little bit of linking
 #[derive(Parser)]
@@ -26,7 +23,7 @@ struct ClnArgs {
 }
 
 fn create_temp_dir() -> Result<TempDir, Error> {
-    let tempdir = TempDir::new("cln")?;
+    let tempdir = Builder::new().prefix("cln").tempdir()?;
 
     Ok(tempdir)
 }
@@ -413,7 +410,10 @@ mod tests {
         let cln_dir = create_temp_dir().unwrap();
         let git_dir = create_temp_dir().unwrap();
 
-        cln().args(&[repo, cln_dir.path().to_str().unwrap()]).assert().success();
+        cln()
+            .args(&[repo, cln_dir.path().to_str().unwrap()])
+            .assert()
+            .success();
         Command::new("git")
             .args(["clone", repo, git_dir.path().to_str().unwrap()])
             .assert()
