@@ -4,6 +4,62 @@ use std::{fs::File, os::unix::fs::PermissionsExt, path::Path, process::Command};
 use tempfile::{Builder, TempDir};
 use thiserror::Error as ThisError;
 
+/// Clns a git repository into a given directory.
+/// If no directory is given, the repository will be cloned into a directory with the same name as the repository.
+/// If no branch is given, the repository will be cloned at HEAD.
+/// If the repository is already in the cln-store, it will be copied from there.
+/// If the repository is not in the cln-store, it will be cloned into a temporary directory and copied from there.
+///
+/// # Examples
+/// ```rust
+/// use cln::cln;
+/// cln("https://github.com/yhakbar/cln.git", None, None).unwrap();
+/// ```
+///
+/// # Errors
+/// Will return an error if the repository cannot be clned.
+/// This can happen if:
+/// - The tempdir where the repository is cloned cannot be created.
+/// - The git command to clone the repository into the tempdir fails.
+/// - The new directory where the repository is copied to cannot be created.
+/// - The temporary directory cannot be persisted to the cln-store.
+/// - The hard links from the cln-store to the new directory fail.
+pub fn cln(repo: &str, dir: Option<&str>, branch: Option<&str>) -> Result<(), Error> {
+    let target_dir = dir
+        .as_ref()
+        .map_or_else(|| get_repo_name(repo), |dir| (*dir).to_string());
+
+    let remote_ref = branch.as_ref().map_or(HEAD, |branch| branch);
+    let ls_remote = run_ls_remote(repo, remote_ref)?;
+    let ls_remote_hash = ls_remote.get_hash()?;
+
+    if is_content_in_store(&ls_remote_hash)? {
+        let head_tree = Tree::from_hash(&ls_remote_hash, ".".to_string())?;
+        if !Path::new(&target_dir).exists() {
+            std::fs::create_dir(&target_dir)?;
+        }
+        ls_remote_hash.walk(&head_tree, Path::new(&target_dir));
+
+        return Ok(());
+    }
+
+    let tmp_dir = create_temp_dir()?;
+    let tmp_dir_path = tmp_dir.path();
+
+    clone_repo(repo, tmp_dir_path, branch)?;
+
+    let head_tree = tmp_dir_path.ls_tree(&ls_remote_hash, ".".to_string())?;
+
+    if !Path::new(&target_dir).exists() {
+        std::fs::create_dir(&target_dir)?;
+    }
+    tmp_dir_path.walk(&head_tree, Path::new(&target_dir));
+
+    tmp_dir.close()?;
+
+    Ok(())
+}
+
 #[derive(ThisError, Debug)]
 pub enum Error {
     #[error("Failed to create tempdir")]
@@ -34,7 +90,7 @@ fn create_temp_dir() -> Result<TempDir, Error> {
     let tempdir = Builder::new()
         .prefix("cln")
         .tempdir()
-        .map_err(|e| Error::TempDirError(e))?;
+        .map_err(Error::TempDirError)?;
 
     Ok(tempdir)
 }
@@ -55,9 +111,9 @@ fn clone_repo(repo: &str, dir: &Path, branch: Option<&str>) -> Result<(), Error>
     cmd.arg(repo)
         .arg(dir)
         .spawn()
-        .map_err(|e| Error::CommandSpawnError(e))?
+        .map_err(Error::CommandSpawnError)?
         .wait()
-        .map_err(|e| Error::CommandWaitError(e))?;
+        .map_err(Error::CommandWaitError)?;
 
     Ok(())
 }
@@ -350,44 +406,6 @@ fn get_repo_name(repo: &str) -> String {
         .last()
         .expect("Could not parse repo name. Check the URL.");
     repo_name.replace(".git", "")
-}
-
-pub fn cln(repo: &str, dir: Option<&str>, branch: Option<&str>) -> Result<(), Error> {
-    let target_dir = if let Some(dir) = &dir {
-        dir.to_string()
-    } else {
-        get_repo_name(&repo)
-    };
-
-    let remote_ref = branch.as_ref().map_or(HEAD, |branch| branch);
-    let ls_remote = run_ls_remote(&repo, remote_ref)?;
-    let ls_remote_hash = ls_remote.get_hash()?;
-
-    if is_content_in_store(&ls_remote_hash)? {
-        let head_tree = Tree::from_hash(&ls_remote_hash, ".".to_string())?;
-        if !Path::new(&target_dir).exists() {
-            std::fs::create_dir(&target_dir)?;
-        }
-        ls_remote_hash.walk(&head_tree, Path::new(&target_dir));
-
-        return Ok(());
-    }
-
-    let tmp_dir = create_temp_dir()?;
-    let tmp_dir_path = tmp_dir.path();
-
-    clone_repo(&repo, tmp_dir_path, branch.as_deref())?;
-
-    let head_tree = tmp_dir_path.ls_tree(&ls_remote_hash, ".".to_string())?;
-
-    if !Path::new(&target_dir).exists() {
-        std::fs::create_dir(&target_dir)?;
-    }
-    tmp_dir_path.walk(&head_tree, Path::new(&target_dir));
-
-    tmp_dir.close()?;
-
-    Ok(())
 }
 
 #[cfg(test)]
