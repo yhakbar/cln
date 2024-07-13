@@ -384,14 +384,14 @@ mod tests {
 
     #[test]
     fn test_create_temp_dir() {
-        let tempdir = create_temp_dir().unwrap();
+        let tempdir = create_temp_dir().expect("Failed to create tempdir");
         assert!(tempdir.path().exists());
-        tempdir.close().unwrap();
+        tempdir.close().expect("Failed to close tempdir");
     }
 
     #[test]
     fn test_get_cln_store_path() {
-        let cln_store = get_cln_store_path().unwrap();
+        let cln_store = get_cln_store_path().expect("Failed to get cln-store path");
         assert!(Path::new(&cln_store).exists());
     }
 
@@ -399,7 +399,7 @@ mod tests {
     fn test_run_ls_remote() {
         let repo = "https://github.com/lua/lua.git";
         let reference = "HEAD";
-        let ls_remote = run_ls_remote(repo, reference).unwrap();
+        let ls_remote = run_ls_remote(repo, reference).expect("Failed to run ls-remote");
         assert!(!ls_remote.rows.is_empty());
     }
 
@@ -407,22 +407,39 @@ mod tests {
     fn test_cln_and_git_clone_are_equivalent() {
         let repo = "https://github.com/lua/lua.git";
 
-        let cln_dir = create_temp_dir().unwrap();
-        let git_dir = create_temp_dir().unwrap();
+        let cln_dir = create_temp_dir().expect("Failed to create cln_dir");
+        let git_dir = create_temp_dir().expect("Failed to create git_dir");
 
         cln()
-            .args(&[repo, cln_dir.path().to_str().unwrap()])
+            .args([
+                repo,
+                cln_dir
+                    .path()
+                    .to_str()
+                    .expect("Failed to convert cln_dir path to string. Check the test setup."),
+            ])
             .assert()
             .success();
         Command::new("git")
-            .args(["clone", repo, git_dir.path().to_str().unwrap()])
+            .args([
+                "clone",
+                repo,
+                git_dir
+                    .path()
+                    .to_str()
+                    .expect("Failed to convert git_dir path to string. Check the test setup."),
+            ])
             .assert()
             .success();
 
-        for entry in git_dir.path().read_dir().unwrap() {
-            let entry = entry.unwrap();
+        for entry in git_dir.path().read_dir().expect("Failed to read git_dir") {
+            let entry = entry.expect("Failed to get entry from git_dir. Check the test setup.");
             let entry_path = entry.path();
-            let entry_name = entry_path.file_name().unwrap().to_str().unwrap();
+            let entry_name = entry_path
+                .file_name()
+                .expect("Failed to get file name from entry path in git_dir. Check the test setup.")
+                .to_str()
+                .expect("Failed to convert file name to string in git_dir. Check the test setup.");
             let cln_entry_path = cln_dir.path().join(entry_name);
             if entry_name == ".git" {
                 continue;
@@ -430,15 +447,19 @@ mod tests {
             assert!(cln_entry_path.exists());
         }
 
-        for entry in cln_dir.path().read_dir().unwrap() {
-            let entry = entry.unwrap();
+        for entry in cln_dir.path().read_dir().expect("Failed to read cln_dir") {
+            let entry = entry.expect("Failed to get entry from cln_dir. Check the test setup.");
             let entry_path = entry.path();
-            let entry_name = entry_path.file_name().unwrap().to_str().unwrap();
+            let entry_name = entry_path
+                .file_name()
+                .expect("Failed to get file name from entry path in cln_dir. Check the test setup.")
+                .to_str()
+                .expect("Failed to convert file name to string in cln_dir. Check the test setup.");
             let git_entry_path = git_dir.path().join(entry_name);
             assert!(git_entry_path.exists());
         }
 
-        cln_dir.close().unwrap();
-        git_dir.close().unwrap();
+        cln_dir.close().expect("Failed to close cln_dir");
+        git_dir.close().expect("Failed to close git_dir");
     }
 }
