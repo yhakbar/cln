@@ -22,6 +22,8 @@ struct ClnArgs {
 
 #[tokio::main]
 async fn main() -> Result<(), Error> {
+    env_logger::init();
+
     let args = ClnArgs::parse();
 
     let dir = args.dir;
