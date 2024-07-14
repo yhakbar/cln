@@ -66,6 +66,7 @@ pub async fn cln(repo: &str, dir: Option<PathBuf>, branch: Option<&str>) -> Resu
     let tmp_dir = create_temp_dir()?;
     let tmp_dir_path = tmp_dir.path();
 
+    debug!("Cloning {} into {}", repo, tmp_dir_path.display());
     clone_repo(repo, tmp_dir_path, branch).await?;
 
     let head_tree = tmp_dir_path
@@ -114,6 +115,8 @@ pub enum Error {
     ReadTreeError(std::io::Error),
     #[error("Parse mode error: {0}")]
     ParseModeError(std::num::ParseIntError),
+    #[error("Failed to read file {0}: {1}")]
+    ReadFileError(String, std::io::Error),
 }
 
 fn create_temp_dir() -> Result<TempDir, Error> {
@@ -231,6 +234,7 @@ async fn is_content_in_store(hash: &str) -> Result<bool, Error> {
 }
 
 // Struct for parsing the rows of stdout from the `git ls-tree` command
+#[derive(Debug)]
 struct TreeRow {
     mode: String,
     otype: String,
@@ -303,6 +307,7 @@ impl TreeRow {
     }
 }
 
+#[derive(Debug)]
 struct Tree {
     rows: Vec<TreeRow>,
     path: String,
@@ -317,8 +322,10 @@ impl Tree {
             .collect::<Vec<TreeRow>>();
         Self { rows, path }
     }
-    fn from_path(store_path: &Path, path: String) -> Result<Self, Error> {
-        let tree = std::fs::read_to_string(store_path).map_err(Error::ReadTreeError)?;
+    async fn from_path(store_path: &Path, path: String) -> Result<Self, Error> {
+        let tree = read_to_string(store_path)
+            .await
+            .map_err(|e| Error::ReadFileError(store_path.display().to_string(), e))?;
         let tree = tree.trim_end();
         Ok(Self::new(tree, path))
     }
@@ -326,7 +333,7 @@ impl Tree {
         let store_root = get_cln_store_path().await?;
         let store_root_path = Path::new(&store_root);
         let store_path = store_root_path.join(hash);
-        Self::from_path(&store_path, path)
+        Self::from_path(&store_path, path).await
     }
 }
 
