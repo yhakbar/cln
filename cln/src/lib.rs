@@ -79,8 +79,8 @@ pub enum Error {
     TempDirError(std::io::Error),
     #[error("Failed to spawn git command")]
     CommandSpawnError(std::io::Error),
-    #[error("Failed to wait for git command")]
-    CommandWaitError(std::io::Error),
+    #[error("Failed to complete git clone")]
+    GitCloneError(String),
     #[error("Failed to parse git command output")]
     Utf8Error(#[from] std::string::FromUtf8Error),
     #[error("Failed to create cln-store directory")]
@@ -121,13 +121,18 @@ async fn clone_repo(repo: &str, dir: &Path, branch: Option<&str>) -> Result<(), 
         cmd.arg("--branch").arg(branch);
     };
 
-    cmd.arg(repo)
+    let out = cmd
+        .arg(repo)
         .arg(dir)
-        .spawn()
-        .map_err(Error::CommandSpawnError)?
-        .wait()
+        .output()
         .await
-        .map_err(Error::CommandWaitError)?;
+        .map_err(Error::CommandSpawnError)?;
+
+    if !out.status.success() {
+        return Err(Error::GitCloneError(
+            String::from_utf8_lossy(&out.stderr).to_string(),
+        ));
+    }
 
     Ok(())
 }
