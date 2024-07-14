@@ -335,6 +335,7 @@ trait Walkable {
     async fn walk(&self, tree: &Tree, target_path: &Path) -> Result<(), Error>;
     async fn write_blob(&self, tree: &Tree, row: &TreeRow, target_path: &Path)
         -> Result<(), Error>;
+    async fn walk_tree(&self, tree: &Tree, row: &TreeRow, target_path: &Path) -> Result<(), Error>;
 }
 
 #[async_trait]
@@ -343,14 +344,8 @@ impl Walkable for RepoPath {
         for row in &tree.rows {
             match row.otype.as_str() {
                 "blob" => self.write_blob(tree, row, target_path).await?,
-                "tree" => {
-                    let cur_path = Self::new(tree.path.as_str());
-                    let new_path = cur_path.join(row.path.clone());
-                    let next_tree = self
-                        .ls_tree(&row.name, new_path.display().to_string())
-                        .await?;
-                    self.walk(&next_tree, target_path).await?;
-                }
+                "tree" => self.walk_tree(tree, row, target_path).await?,
+
                 _ => {}
             }
         }
@@ -388,6 +383,16 @@ impl Walkable for RepoPath {
 
         Ok(())
     }
+    async fn walk_tree(&self, tree: &Tree, row: &TreeRow, target_path: &Path) -> Result<(), Error> {
+        let cur_path = Self::new(tree.path.as_str());
+        let new_path = cur_path.join(row.path.clone());
+        let next_tree = self
+            .ls_tree(&row.name, new_path.display().to_string())
+            .await?;
+        self.walk(&next_tree, target_path).await?;
+
+        Ok(())
+    }
 }
 
 type Hash = String;
@@ -397,16 +402,8 @@ impl Walkable for Hash {
     async fn walk(&self, tree: &Tree, target_path: &Path) -> Result<(), Error> {
         for row in &tree.rows {
             match row.otype.as_str() {
-                "blob" => {
-                    self.write_blob(tree, row, target_path).await?;
-                }
-                "tree" => {
-                    let cur_path = Path::new(tree.path.as_str());
-                    let new_path = cur_path.join(row.path.clone());
-                    let next_tree =
-                        Tree::from_hash(&row.name, new_path.display().to_string()).await?;
-                    self.walk(&next_tree, target_path).await?;
-                }
+                "blob" => self.write_blob(tree, row, target_path).await?,
+                "tree" => self.walk_tree(tree, row, target_path).await?,
                 _ => {}
             }
         }
@@ -440,6 +437,14 @@ impl Walkable for Hash {
             store_path.display(),
             target_file.display()
         );
+
+        Ok(())
+    }
+    async fn walk_tree(&self, tree: &Tree, row: &TreeRow, target_path: &Path) -> Result<(), Error> {
+        let cur_path = Path::new(tree.path.as_str());
+        let new_path = cur_path.join(row.path.clone());
+        let next_tree = Tree::from_hash(&row.name, new_path.display().to_string()).await?;
+        self.walk(&next_tree, target_path).await?;
 
         Ok(())
     }
