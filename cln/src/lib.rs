@@ -88,31 +88,31 @@ pub async fn cln(repo: &str, dir: Option<PathBuf>, branch: Option<&str>) -> Resu
 
 #[derive(ThisError, Debug)]
 pub enum Error {
-    #[error("Failed to create tempdir")]
+    #[error("Failed to create tempdir: {0}")]
     TempDirError(std::io::Error),
-    #[error("Failed to close tempdir")]
+    #[error("Failed to close tempdir: {0}")]
     TempDirCloseError(std::io::Error),
-    #[error("Failed to spawn git command")]
+    #[error("Failed to spawn git command: {0}")]
     CommandSpawnError(std::io::Error),
-    #[error("Failed to complete git clone")]
+    #[error("Failed to complete git clone: {0}")]
     GitCloneError(String),
-    #[error("Failed to parse git command output")]
+    #[error("Failed to parse git command output: {0}")]
     Utf8Error(#[from] std::string::FromUtf8Error),
-    #[error("Failed to create cln-store directory")]
+    #[error("Failed to create cln-store directory: {0}")]
     CreateDirError(std::io::Error),
     #[error("Failed to find home directory")]
     HomeDirError,
     #[error("No matching reference found")]
     NoMatchingReferenceError,
-    #[error("Failed to write to cln-store")]
+    #[error("Failed to write to cln-store: {0}")]
     WriteToStoreError(std::io::Error),
-    #[error("Failed to create directory")]
+    #[error("Failed to create directory: {0}")]
     CreateDirAllError(std::io::Error),
-    #[error("Failed to hard link")]
+    #[error("Failed to hard link: {0}")]
     HardLinkError(std::io::Error),
-    #[error("Failed to read tree")]
+    #[error("Failed to read tree: {0}")]
     ReadTreeError(std::io::Error),
-    #[error("Parse mode error")]
+    #[error("Parse mode error: {0}")]
     ParseModeError(std::num::ParseIntError),
 }
 
@@ -284,7 +284,7 @@ impl TreeRow {
             .map_err(Error::CommandSpawnError)?;
         write(&store_path, &output.stdout)
             .await
-            .map_err(|e| Error::WriteToStoreError(e))?;
+            .map_err(Error::WriteToStoreError)?;
         let mut stored_file_permissions =
             std::fs::Permissions::from_mode(self.mode.parse().map_err(Error::ParseModeError)?);
         stored_file_permissions.set_readonly(true);
@@ -512,7 +512,7 @@ impl Treevarsable for RepoPath {
 
         write(&store_path, &ls_tree_trimmed)
             .await
-            .map_err(|e| Error::WriteToStoreError(e))?;
+            .map_err(Error::WriteToStoreError)?;
 
         debug!("Wrote to store: {}", store_path.display());
 
