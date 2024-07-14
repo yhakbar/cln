@@ -36,11 +36,7 @@ use tokio::{fs::File, process::Command};
 /// - The temporary directory cannot be persisted to the cln-store.
 /// - The hard links from the cln-store to the new directory fail.
 pub async fn cln(repo: &str, dir: Option<PathBuf>, branch: Option<&str>) -> Result<(), Error> {
-    let target_dir = match dir {
-        Some(dir) => dir,
-        None => get_repo_name(repo),
-    };
-
+    let target_dir = dir.map_or_else(|| get_repo_name(repo), |dir| dir);
     let remote_ref = branch.as_ref().map_or(HEAD, |branch| branch);
     let ls_remote = run_ls_remote(repo, remote_ref).await?;
     let ls_remote_hash = ls_remote.get_hash()?;
