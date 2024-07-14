@@ -9,7 +9,7 @@ use std::{
 use tempfile::{Builder, TempDir};
 use thiserror::Error as ThisError;
 use tokio::{
-    fs::{create_dir, create_dir_all, hard_link, read_to_string, write, File},
+    fs::{create_dir_all, hard_link, read_to_string, write, File},
     process::Command,
 };
 
@@ -54,7 +54,7 @@ pub async fn cln(repo: &str, dir: Option<PathBuf>, branch: Option<&str>) -> Resu
     if is_content_in_store(&ls_remote_hash).await? {
         let head_tree = Tree::from_hash(&ls_remote_hash, ".".to_string()).await?;
         if !&target_dir.exists() {
-            create_dir(&target_dir)
+            create_dir_all(&target_dir)
                 .await
                 .map_err(Error::CreateDirError)?;
         }
@@ -73,7 +73,7 @@ pub async fn cln(repo: &str, dir: Option<PathBuf>, branch: Option<&str>) -> Resu
         .await?;
 
     if !Path::new(&target_dir).exists() {
-        create_dir(&target_dir)
+        create_dir_all(&target_dir)
             .await
             .map_err(Error::CreateDirError)?;
     }
@@ -158,7 +158,7 @@ async fn get_cln_store_path() -> Result<String, Error> {
     if let Some(homedir) = home_dir() {
         let cln_store = homedir.join(".cln-store");
         if !cln_store.exists() {
-            create_dir(&cln_store)
+            create_dir_all(&cln_store)
                 .await
                 .map_err(Error::CreateDirError)?;
         }
