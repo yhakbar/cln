@@ -104,8 +104,8 @@ pub enum Error {
     HomeDirError,
     #[error("No matching reference found")]
     NoMatchingReferenceError,
-    #[error("Failed to write to cln-store: {0}")]
-    WriteToStoreError(std::io::Error),
+    #[error("Failed to write {0} to cln-store: {1}")]
+    WriteToStoreError(String, std::io::Error),
     #[error("Failed to create directory: {0}")]
     CreateDirAllError(std::io::Error),
     #[error("Failed to hard link: {0}")]
@@ -270,6 +270,10 @@ impl TreeRow {
             return Ok(());
         }
 
+        File::create(&store_path)
+            .await
+            .map_err(|e| Error::WriteToStoreError(store_path.to_string_lossy().to_string(), e))?;
+
         debug!(
             "Writing blob {} to store path {}",
             self.name,
@@ -284,7 +288,7 @@ impl TreeRow {
             .map_err(Error::CommandSpawnError)?;
         write(&store_path, &output.stdout)
             .await
-            .map_err(Error::WriteToStoreError)?;
+            .map_err(|e| Error::WriteToStoreError(store_path.to_string_lossy().to_string(), e))?;
         let mut stored_file_permissions =
             std::fs::Permissions::from_mode(self.mode.parse().map_err(Error::ParseModeError)?);
         stored_file_permissions.set_readonly(true);
@@ -500,6 +504,10 @@ impl Treevarsable for RepoPath {
             ));
         }
 
+        File::create(&store_path)
+            .await
+            .map_err(|e| Error::WriteToStoreError(store_path.to_string_lossy().to_string(), e))?;
+
         let ls_tree_stdout = Command::new("git")
             .args(["ls-tree", reference])
             .current_dir(self)
@@ -512,7 +520,7 @@ impl Treevarsable for RepoPath {
 
         write(&store_path, &ls_tree_trimmed)
             .await
-            .map_err(Error::WriteToStoreError)?;
+            .map_err(|e| Error::WriteToStoreError(store_path.to_string_lossy().to_string(), e))?;
 
         debug!("Wrote to store: {}", store_path.display());
 
