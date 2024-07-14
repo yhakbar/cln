@@ -7,7 +7,10 @@ use std::{
 };
 use tempfile::{Builder, TempDir};
 use thiserror::Error as ThisError;
-use tokio::{fs::File, process::Command};
+use tokio::{
+    fs::{write, File},
+    process::Command,
+};
 
 /// Clns a git repository into a given directory.
 /// If no directory is given, the repository will be cloned into a directory with the same name as the repository.
@@ -247,13 +250,12 @@ impl TreeRow {
             return Ok(());
         }
 
-        let store_file = File::create(&store_path).await?.into_std().await;
-        Command::new("git")
+        let output = Command::new("git")
             .args(["cat-file", "-p", &self.name])
             .current_dir(repo_dir)
-            .stdout(store_file)
             .output()
             .await?;
+        write(&store_path, &output.stdout).await?;
         let mut stored_file_permissions =
             std::fs::Permissions::from_mode(self.mode.parse().map_err(|_| {
                 Error::WriteToStoreError(std::io::Error::from(std::io::ErrorKind::InvalidInput))
@@ -461,5 +463,26 @@ mod tests {
             .await
             .expect("Failed to run ls-remote");
         assert!(!ls_remote.rows.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_clone_repo() {
+        let repo = "https://github.com/lua/lua.git";
+        let tmp_dir = create_temp_dir().expect("Failed to create tempdir");
+        let tmp_dir_path = tmp_dir.path();
+        clone_repo(repo, tmp_dir_path, None)
+            .await
+            .expect("Failed to clone repo");
+        assert!(tmp_dir_path.join("HEAD").exists());
+
+        for entry in tmp_dir_path.read_dir().expect("Failed to read tempdir") {
+            let entry = entry.expect("Failed to read entry");
+            let entry_path = entry.path();
+            let filesize = entry_path.metadata().expect("Failed to get metadata").len();
+            assert!(filesize > 0);
+            assert!(entry_path.exists());
+        }
+
+        tmp_dir.close().expect("Failed to close tempdir");
     }
 }
