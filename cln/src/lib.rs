@@ -1,7 +1,10 @@
 use async_trait::async_trait;
 use home::home_dir;
 use rayon::prelude::*;
-use std::{os::unix::fs::PermissionsExt, path::Path};
+use std::{
+    os::unix::fs::PermissionsExt,
+    path::{Path, PathBuf},
+};
 use tempfile::{Builder, TempDir};
 use thiserror::Error as ThisError;
 use tokio::{fs::File, process::Command};
@@ -19,8 +22,7 @@ use tokio::{fs::File, process::Command};
 ///
 /// #[tokio::main]
 /// async fn main() {
-///     let dir = tempdir().unwrap();
-///     let dir = dir.path().to_str().unwrap();
+///     let dir = tempdir().unwrap().into_path();
 ///     cln("https://github.com/yhakbar/cln.git", Some(dir), None).await.unwrap();
 /// }
 /// ```
@@ -33,10 +35,11 @@ use tokio::{fs::File, process::Command};
 /// - The new directory where the repository is copied to cannot be created.
 /// - The temporary directory cannot be persisted to the cln-store.
 /// - The hard links from the cln-store to the new directory fail.
-pub async fn cln(repo: &str, dir: Option<&str>, branch: Option<&str>) -> Result<(), Error> {
-    let target_dir = dir
-        .as_ref()
-        .map_or_else(|| get_repo_name(repo), |dir| (*dir).to_string());
+pub async fn cln(repo: &str, dir: Option<PathBuf>, branch: Option<&str>) -> Result<(), Error> {
+    let target_dir = match dir {
+        Some(dir) => dir,
+        None => get_repo_name(repo),
+    };
 
     let remote_ref = branch.as_ref().map_or(HEAD, |branch| branch);
     let ls_remote = run_ls_remote(repo, remote_ref).await?;
@@ -44,12 +47,10 @@ pub async fn cln(repo: &str, dir: Option<&str>, branch: Option<&str>) -> Result<
 
     if is_content_in_store(&ls_remote_hash)? {
         let head_tree = Tree::from_hash(&ls_remote_hash, ".".to_string())?;
-        if !Path::new(&target_dir).exists() {
+        if !&target_dir.exists() {
             std::fs::create_dir(&target_dir)?;
         }
-        ls_remote_hash
-            .walk(&head_tree, Path::new(&target_dir))
-            .await;
+        ls_remote_hash.walk(&head_tree, &target_dir).await;
 
         return Ok(());
     }
@@ -431,12 +432,12 @@ impl Treevarsable for RepoPath {
     }
 }
 
-fn get_repo_name(repo: &str) -> String {
+fn get_repo_name(repo: &str) -> PathBuf {
     let repo_name = repo
         .split('/')
         .last()
         .expect("Could not parse repo name. Check the URL.");
-    repo_name.replace(".git", "")
+    PathBuf::from(repo_name.replace(".git", ""))
 }
 
 #[cfg(test)]

@@ -1,6 +1,7 @@
 use anyhow::Error;
 use clap::Parser;
 use cln::cln;
+use std::path::PathBuf;
 
 /// Git clone client with a little bit of linking
 #[derive(Parser)]
@@ -12,7 +13,7 @@ struct ClnArgs {
 
     /// Directory to clone into
     #[arg()]
-    dir: Option<String>,
+    dir: Option<PathBuf>,
 
     /// Branch to checkout
     #[arg(short, long)]
@@ -27,7 +28,7 @@ async fn main() -> Result<(), Error> {
     let branch = args.branch;
     let repo = args.repo;
 
-    cln(&repo, dir.as_deref(), branch.as_deref()).await?;
+    cln(&repo, dir, branch.as_deref()).await?;
 
     Ok(())
 }
