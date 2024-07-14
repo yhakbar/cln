@@ -15,10 +15,13 @@ use tokio::{fs::File, process::Command};
 /// # Examples
 /// ```rust
 /// use cln::cln;
+/// use tempfile::tempdir;
 ///
 /// #[tokio::main]
 /// async fn main() {
-///     cln("https://github.com/yhakbar/cln.git", None, None).await.unwrap();
+///     let dir = tempdir().unwrap();
+///     let dir = dir.path().to_str().unwrap();
+///     cln("https://github.com/yhakbar/cln.git", Some(dir), None).await.unwrap();
 /// }
 /// ```
 ///
