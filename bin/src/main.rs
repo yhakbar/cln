@@ -19,14 +19,15 @@ struct ClnArgs {
     branch: Option<String>,
 }
 
-fn main() -> Result<(), Error> {
+#[tokio::main]
+async fn main() -> Result<(), Error> {
     let args = ClnArgs::parse();
 
     let dir = args.dir;
     let branch = args.branch;
     let repo = args.repo;
 
-    cln(&repo, dir.as_deref(), branch.as_deref())?;
+    cln(&repo, dir.as_deref(), branch.as_deref()).await?;
 
     Ok(())
 }

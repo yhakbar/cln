@@ -1,8 +1,10 @@
+use async_trait::async_trait;
 use home::home_dir;
 use rayon::prelude::*;
-use std::{fs::File, os::unix::fs::PermissionsExt, path::Path, process::Command};
+use std::{os::unix::fs::PermissionsExt, path::Path};
 use tempfile::{Builder, TempDir};
 use thiserror::Error as ThisError;
+use tokio::{fs::File, process::Command};
 
 /// Clns a git repository into a given directory.
 /// If no directory is given, the repository will be cloned into a directory with the same name as the repository.
@@ -13,7 +15,11 @@ use thiserror::Error as ThisError;
 /// # Examples
 /// ```rust
 /// use cln::cln;
-/// cln("https://github.com/yhakbar/cln.git", None, None).unwrap();
+///
+/// #[tokio::main]
+/// async fn main() {
+///     cln("https://github.com/yhakbar/cln.git", None, None).await.unwrap();
+/// }
 /// ```
 ///
 /// # Errors
@@ -24,13 +30,13 @@ use thiserror::Error as ThisError;
 /// - The new directory where the repository is copied to cannot be created.
 /// - The temporary directory cannot be persisted to the cln-store.
 /// - The hard links from the cln-store to the new directory fail.
-pub fn cln(repo: &str, dir: Option<&str>, branch: Option<&str>) -> Result<(), Error> {
+pub async fn cln(repo: &str, dir: Option<&str>, branch: Option<&str>) -> Result<(), Error> {
     let target_dir = dir
         .as_ref()
         .map_or_else(|| get_repo_name(repo), |dir| (*dir).to_string());
 
     let remote_ref = branch.as_ref().map_or(HEAD, |branch| branch);
-    let ls_remote = run_ls_remote(repo, remote_ref)?;
+    let ls_remote = run_ls_remote(repo, remote_ref).await?;
     let ls_remote_hash = ls_remote.get_hash()?;
 
     if is_content_in_store(&ls_remote_hash)? {
@@ -38,7 +44,9 @@ pub fn cln(repo: &str, dir: Option<&str>, branch: Option<&str>) -> Result<(), Er
         if !Path::new(&target_dir).exists() {
             std::fs::create_dir(&target_dir)?;
         }
-        ls_remote_hash.walk(&head_tree, Path::new(&target_dir));
+        ls_remote_hash
+            .walk(&head_tree, Path::new(&target_dir))
+            .await;
 
         return Ok(());
     }
@@ -46,14 +54,16 @@ pub fn cln(repo: &str, dir: Option<&str>, branch: Option<&str>) -> Result<(), Er
     let tmp_dir = create_temp_dir()?;
     let tmp_dir_path = tmp_dir.path();
 
-    clone_repo(repo, tmp_dir_path, branch)?;
+    clone_repo(repo, tmp_dir_path, branch).await?;
 
-    let head_tree = tmp_dir_path.ls_tree(&ls_remote_hash, ".".to_string())?;
+    let head_tree = tmp_dir_path
+        .ls_tree(&ls_remote_hash, ".".to_string())
+        .await?;
 
     if !Path::new(&target_dir).exists() {
         std::fs::create_dir(&target_dir)?;
     }
-    tmp_dir_path.walk(&head_tree, Path::new(&target_dir));
+    tmp_dir_path.walk(&head_tree, Path::new(&target_dir)).await;
 
     tmp_dir.close()?;
 
@@ -95,7 +105,7 @@ fn create_temp_dir() -> Result<TempDir, Error> {
     Ok(tempdir)
 }
 
-fn clone_repo(repo: &str, dir: &Path, branch: Option<&str>) -> Result<(), Error> {
+async fn clone_repo(repo: &str, dir: &Path, branch: Option<&str>) -> Result<(), Error> {
     let mut cmd = Command::new("git");
 
     cmd.arg("clone")
@@ -113,6 +123,7 @@ fn clone_repo(repo: &str, dir: &Path, branch: Option<&str>) -> Result<(), Error>
         .spawn()
         .map_err(Error::CommandSpawnError)?
         .wait()
+        .await
         .map_err(Error::CommandWaitError)?;
 
     Ok(())
@@ -174,10 +185,11 @@ impl LsRemote {
     }
 }
 
-fn run_ls_remote(repo: &str, reference: &str) -> Result<LsRemote, Error> {
+async fn run_ls_remote(repo: &str, reference: &str) -> Result<LsRemote, Error> {
     let output = Command::new("git")
         .args(["ls-remote", repo, reference])
-        .output()?;
+        .output()
+        .await?;
     let stdout = String::from_utf8(output.stdout)?;
     let stdout = stdout.trim_end();
     Ok(LsRemote::new(stdout, reference))
@@ -221,7 +233,7 @@ impl TreeRow {
             path,
         }
     }
-    fn write_to_store(&self, repo_dir: &RepoPath) -> Result<(), Error> {
+    async fn write_to_store(&self, repo_dir: &RepoPath) -> Result<(), Error> {
         let store_root = get_cln_store_path()?;
         let store_root_path = Path::new(&store_root);
         let store_path = store_root_path.join(&self.name);
@@ -230,18 +242,22 @@ impl TreeRow {
             return Ok(());
         }
 
-        let store_file = File::create(&store_path)?;
+        let store_file = File::create(&store_path).await?.into_std().await;
         Command::new("git")
             .args(["cat-file", "-p", &self.name])
             .current_dir(repo_dir)
             .stdout(store_file)
-            .output()?;
+            .output()
+            .await?;
         let mut stored_file_permissions =
             std::fs::Permissions::from_mode(self.mode.parse().map_err(|_| {
                 Error::WriteToStoreError(std::io::Error::from(std::io::ErrorKind::InvalidInput))
             })?);
         stored_file_permissions.set_readonly(true);
-        File::open(&store_path)?.set_permissions(stored_file_permissions)?;
+        File::open(&store_path)
+            .await?
+            .set_permissions(stored_file_permissions)
+            .await?;
 
         Ok(())
     }
@@ -276,17 +292,19 @@ impl Tree {
 
 type RepoPath = Path;
 
+#[async_trait]
 trait Walkable {
-    fn walk(&self, tree: &Tree, target_path: &Path);
+    async fn walk(&self, tree: &Tree, target_path: &Path);
 }
 
+#[async_trait]
 impl Walkable for RepoPath {
-    fn walk(&self, tree: &Tree, target_path: &Path) {
-        tree.rows
-            .par_iter()
-            .for_each(|row| match row.otype.as_str() {
+    async fn walk(&self, tree: &Tree, target_path: &Path) {
+        for row in &tree.rows {
+            match row.otype.as_str() {
                 "blob" => {
                     row.write_to_store(self)
+                        .await
                         .unwrap_or_else(|_| panic!("Failed to write {} to cln-store", row.name));
                     let cur_path = Self::new(tree.path.as_str());
                     let target_dir = target_path.join(cur_path);
@@ -318,22 +336,23 @@ impl Walkable for RepoPath {
                     let new_path = cur_path.join(row.path.clone());
                     let next_tree = self
                         .ls_tree(&row.name, new_path.display().to_string())
+                        .await
                         .unwrap_or_else(|_| panic!("Failed to `git ls-tree {}`", row.name));
-                    self.walk(&next_tree, target_path);
+                    self.walk(&next_tree, target_path).await;
                 }
                 _ => {}
-            });
+            }
+        }
     }
 }
 
 type Hash = String;
 
+#[async_trait]
 impl Walkable for Hash {
-    fn walk(&self, tree: &Tree, target_path: &Path) {
-        let cln_store = get_cln_store_path().expect("Failed to get cln-store path");
-        tree.rows
-            .par_iter()
-            .for_each(|row| match row.otype.as_str() {
+    async fn walk(&self, tree: &Tree, target_path: &Path) {
+        for row in &tree.rows {
+            match row.otype.as_str() {
                 "blob" => {
                     let cur_path = Path::new(tree.path.as_str());
                     let target_dir = target_path.join(cur_path);
@@ -346,38 +365,41 @@ impl Walkable for Hash {
                     if target_file.exists() {
                         return;
                     }
-                    std::fs::hard_link(cln_store.clone() + "/" + &row.name, &target_file)
-                        .unwrap_or_else(|_| {
-                            panic!(
-                                "Failed to hard link {} to {}",
-                                row.name,
-                                target_file.display()
-                            )
-                        });
+                    std::fs::hard_link(
+                        get_cln_store_path().expect("Failed to get cln-store path")
+                            + "/"
+                            + &row.name,
+                        &target_file,
+                    )
+                    .unwrap_or_else(|_| {
+                        panic!(
+                            "Failed to hard link {} to {}",
+                            row.name,
+                            target_file.display()
+                        )
+                    });
                 }
                 "tree" => {
                     let cur_path = Path::new(tree.path.as_str());
                     let new_path = cur_path.join(row.path.clone());
-                    let next_tree = Tree::from_path(
-                        &Path::new(&cln_store).join(&row.name),
-                        new_path.display().to_string(),
-                    )
-                    .unwrap_or_else(|_| panic!("Failed to read tree {}", row.name));
-                    self.walk(&next_tree, target_path);
+                    let next_tree = Tree::from_hash(&row.name, new_path.display().to_string())
+                        .unwrap_or_else(|_| panic!("Failed to read tree {}", row.name));
+                    self.walk(&next_tree, target_path).await;
                 }
                 _ => {}
-            });
+            }
+        }
     }
 }
 
 trait Treevarsable {
-    fn ls_tree(&self, reference: &str, path: String) -> Result<Tree, Error>;
+    async fn ls_tree(&self, reference: &str, path: String) -> Result<Tree, Error>;
 }
 
 const HEAD: &str = "HEAD";
 
 impl Treevarsable for RepoPath {
-    fn ls_tree(&self, reference: &str, path: String) -> Result<Tree, Error> {
+    async fn ls_tree(&self, reference: &str, path: String) -> Result<Tree, Error> {
         let cln_store = get_cln_store_path()?;
 
         let store_path = Self::new(&cln_store).join(reference);
@@ -389,7 +411,8 @@ impl Treevarsable for RepoPath {
         let ls_tree_stdout = Command::new("git")
             .args(["ls-tree", reference])
             .current_dir(self)
-            .output()?
+            .output()
+            .await?
             .stdout;
         let ls_tree_string = String::from_utf8_lossy(&ls_tree_stdout);
         let ls_tree_trimmed = ls_tree_string.trim_end().to_string();
@@ -425,11 +448,13 @@ mod tests {
         assert!(Path::new(&cln_store).exists());
     }
 
-    #[test]
-    fn test_run_ls_remote() {
+    #[tokio::test]
+    async fn test_run_ls_remote() {
         let repo = "https://github.com/lua/lua.git";
         let reference = "HEAD";
-        let ls_remote = run_ls_remote(repo, reference).expect("Failed to run ls-remote");
+        let ls_remote = run_ls_remote(repo, reference)
+            .await
+            .expect("Failed to run ls-remote");
         assert!(!ls_remote.rows.is_empty());
     }
 }
