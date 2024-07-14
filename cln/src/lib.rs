@@ -341,13 +341,27 @@ trait Walkable {
 #[async_trait]
 impl Walkable for RepoPath {
     async fn walk(&self, tree: &Tree, target_path: &Path) -> Result<(), Error> {
+        let mut blob_tasks = vec![];
+        let mut tree_tasks = vec![];
+
         for row in &tree.rows {
             match row.otype.as_str() {
-                "blob" => self.write_blob(tree, row, target_path).await?,
-                "tree" => self.walk_tree(tree, row, target_path).await?,
-
+                "blob" => {
+                    blob_tasks.push(async move { self.write_blob(tree, row, target_path).await });
+                }
+                "tree" => {
+                    tree_tasks.push(async move { self.walk_tree(tree, row, target_path).await });
+                }
                 _ => {}
             }
+        }
+
+        for task in blob_tasks {
+            task.await?;
+        }
+
+        for task in tree_tasks {
+            task.await?;
         }
 
         Ok(())
@@ -400,12 +414,27 @@ type Hash = String;
 #[async_trait]
 impl Walkable for Hash {
     async fn walk(&self, tree: &Tree, target_path: &Path) -> Result<(), Error> {
+        let mut blob_tasks = vec![];
+        let mut tree_tasks = vec![];
+
         for row in &tree.rows {
             match row.otype.as_str() {
-                "blob" => self.write_blob(tree, row, target_path).await?,
-                "tree" => self.walk_tree(tree, row, target_path).await?,
+                "blob" => {
+                    blob_tasks.push(async move { self.write_blob(tree, row, target_path).await });
+                }
+                "tree" => {
+                    tree_tasks.push(async move { self.walk_tree(tree, row, target_path).await });
+                }
                 _ => {}
             }
+        }
+
+        for task in blob_tasks {
+            task.await?;
+        }
+
+        for task in tree_tasks {
+            task.await?;
         }
 
         Ok(())
