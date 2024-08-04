@@ -133,5 +133,4 @@ Benchmark 1: tmp="$(mktemp -d)" && cln https://github.com/torvalds/linux "$tmp" 
 
 ## Known Issues
 
-- `cln` doesn't support using a specific commit of a repo. This is because `cln` uses `git ls-remote` to determine the object hash of the `HEAD` of the remote repository, and then uses `git clone --bare --depth 1 --single-branch` to clone the repo. Both of these commands don't support working with a specific commit, so the only feasible way to handle this is to fully clone the repo, then checkout the specific commit. That would defeat the purpose of using `cln` in the first place, so it's not supported.
 - Distribution isn't setup. This is a toy project, so I'm not going to spend time setting up a release process for it. If you want to use it, you'll have to clone the repo and build it yourself.
