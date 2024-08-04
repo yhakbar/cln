@@ -6,11 +6,12 @@ use std::sync::Arc;
 use tokio::fs::create_dir_all;
 use tokio::sync::Mutex;
 
-pub static STORE_PATH: Lazy<Arc<Mutex<Option<PathBuf>>>> = Lazy::new(|| Arc::new(Mutex::new(None)));
+pub static STORE_PATH: Lazy<Arc<Mutex<PathBuf>>> =
+    Lazy::new(|| Arc::new(Mutex::new(PathBuf::from(".cln-store"))));
 
 pub async fn ensure_cln_store_path(store_path: Option<PathBuf>) -> Result<(), Error> {
     if let Some(store_path) = store_path {
-        STORE_PATH.lock().await.replace(store_path.clone());
+        *STORE_PATH.lock().await = store_path;
 
         return Ok(());
     }
@@ -23,7 +24,7 @@ pub async fn ensure_cln_store_path(store_path: Option<PathBuf>) -> Result<(), Er
                 .map_err(Error::CreateDirError)?;
         }
 
-        STORE_PATH.lock().await.replace(cln_store);
+        *STORE_PATH.lock().await = cln_store;
 
         Ok(())
     } else {
@@ -33,7 +34,6 @@ pub async fn ensure_cln_store_path(store_path: Option<PathBuf>) -> Result<(), Er
 
 pub async fn is_content_stored(hash: &str) -> Result<bool, Error> {
     let store_path = STORE_PATH.lock().await.clone();
-    let store_path = store_path.ok_or(Error::NoMatchingReferenceError)?;
     let content_path = store_path.join(hash);
     Ok(content_path.exists())
 }
@@ -54,11 +54,7 @@ mod tests {
             .await
             .expect("Failed to ensure cln-store path");
 
-        let store_path = STORE_PATH
-            .lock()
-            .await
-            .clone()
-            .expect("Failed to lock cln-store path");
+        let store_path = STORE_PATH.lock().await.clone();
 
         assert!(store_path.exists());
     }

@@ -64,41 +64,77 @@ pub async fn cln(
 
     let target_dir = dir.map_or_else(|| get_repo_name(repo), |dir| dir);
     let remote_ref = branch.as_ref().map_or(HEAD, |branch| branch);
-    let ls_remote = run_ls_remote(repo, remote_ref).await?;
-    let ls_remote_hash = ls_remote.get_hash()?;
 
-    if is_content_stored(&ls_remote_hash).await? {
-        let head_tree = Tree::from_hash(&ls_remote_hash, ".".to_string()).await?;
+    if let Ok(ls_remote) = run_ls_remote(repo, remote_ref).await {
+        if let Ok(ls_remote_hash) = ls_remote.get_hash() {
+            if is_content_stored(&ls_remote_hash).await? {
+                let head_tree = Tree::from_hash(&ls_remote_hash, ".".to_string()).await?;
+                if !&target_dir.exists() {
+                    create_dir_all(&target_dir)
+                        .await
+                        .map_err(Error::CreateDirAllError)?;
+                }
+                ls_remote_hash.walk(&head_tree, &target_dir).await?;
+
+                return Ok(());
+            }
+
+            let tmp_dir = create_temp_dir()?;
+            let tmp_dir_path = tmp_dir.path();
+
+            debug!("Cloning {} into {}", repo, tmp_dir_path.display());
+            clone_repo(repo, tmp_dir_path, branch).await?;
+
+            let head_tree = tmp_dir_path
+                .ls_tree(&ls_remote_hash, ".".to_string())
+                .await?;
+
+            if !Path::new(&target_dir).exists() {
+                create_dir_all(&target_dir)
+                    .await
+                    .map_err(Error::CreateDirAllError)?;
+            }
+            tmp_dir_path
+                .walk(&head_tree, Path::new(&target_dir))
+                .await?;
+
+            tmp_dir.close().map_err(Error::TempDirCloseError)?;
+
+            return Ok(());
+        }
+    }
+
+    if is_content_stored(remote_ref).await? {
+        let head_tree = Tree::from_hash(remote_ref, ".".to_string()).await?;
         if !&target_dir.exists() {
             create_dir_all(&target_dir)
                 .await
-                .map_err(Error::CreateDirError)?;
+                .map_err(Error::CreateDirAllError)?;
         }
-        ls_remote_hash.walk(&head_tree, &target_dir).await?;
+        remote_ref.to_string().walk(&head_tree, &target_dir).await?;
 
         return Ok(());
     }
 
-    let tmp_dir = create_temp_dir()?;
-    let tmp_dir_path = tmp_dir.path();
+    let tempdir = create_temp_dir()?;
+    let tempdir_path = tempdir.path();
 
-    debug!("Cloning {} into {}", repo, tmp_dir_path.display());
-    clone_repo(repo, tmp_dir_path, branch).await?;
+    debug!("Slow cloning {} into {}", repo, tempdir_path.display());
+    slow_clone_repo(repo, tempdir_path, branch).await?;
 
-    let head_tree = tmp_dir_path
-        .ls_tree(&ls_remote_hash, ".".to_string())
-        .await?;
+    let head_tree = tempdir_path.ls_tree(remote_ref, ".".to_string()).await?;
 
     if !Path::new(&target_dir).exists() {
         create_dir_all(&target_dir)
             .await
-            .map_err(Error::CreateDirError)?;
+            .map_err(Error::CreateDirAllError)?;
     }
-    tmp_dir_path
+
+    tempdir_path
         .walk(&head_tree, Path::new(&target_dir))
         .await?;
 
-    tmp_dir.close().map_err(Error::TempDirCloseError)?;
+    tempdir.close().map_err(Error::TempDirCloseError)?;
 
     Ok(())
 }
@@ -136,6 +172,40 @@ async fn clone_repo(repo: &str, dir: &Path, branch: Option<&str>) -> Result<(), 
         return Err(Error::GitCloneError(
             String::from_utf8_lossy(&out.stderr).to_string(),
         ));
+    }
+
+    Ok(())
+}
+
+async fn slow_clone_repo(repo: &str, dir: &Path, branch: Option<&str>) -> Result<(), Error> {
+    let out = Command::new("git")
+        .arg("clone")
+        .arg(repo)
+        .arg(dir)
+        .output()
+        .await
+        .map_err(Error::CommandSpawnError)?;
+
+    if !out.status.success() {
+        return Err(Error::GitCloneError(
+            String::from_utf8_lossy(&out.stderr).to_string(),
+        ));
+    }
+
+    if let Some(branch) = branch {
+        let out = Command::new("git")
+            .arg("checkout")
+            .arg(branch)
+            .current_dir(dir)
+            .output()
+            .await
+            .map_err(Error::CommandSpawnError)?;
+
+        if !out.status.success() {
+            return Err(Error::GitCloneError(
+                String::from_utf8_lossy(&out.stderr).to_string(),
+            ));
+        }
     }
 
     Ok(())
@@ -231,9 +301,7 @@ impl TreeRow {
     async fn write_to_store(&self, repo_dir: &RepoPath) -> Result<(), Error> {
         let store_path = STORE_PATH.lock().await.clone();
 
-        let content_path = store_path
-            .ok_or(Error::NoMatchingReferenceError)?
-            .join(&self.name);
+        let content_path = store_path.join(&self.name);
 
         if content_path.exists() {
             return Ok(());
@@ -296,9 +364,7 @@ impl Tree {
     }
     async fn from_hash(hash: &str, path: String) -> Result<Self, Error> {
         let store_path = STORE_PATH.lock().await.clone();
-        let content_path = store_path
-            .ok_or(Error::NoMatchingReferenceError)?
-            .join(hash);
+        let content_path = store_path.join(hash);
 
         Self::from_path(&content_path, path).await
     }
@@ -362,9 +428,7 @@ impl Walkable for RepoPath {
         }
 
         let store_path = STORE_PATH.lock().await.clone();
-        let content_path = store_path
-            .ok_or(Error::NoMatchingReferenceError)?
-            .join(&row.name);
+        let content_path = store_path.join(&row.name);
 
         hard_link(content_path.clone(), &target_file)
             .await
@@ -439,9 +503,7 @@ impl Walkable for Hash {
         }
 
         let store_path = STORE_PATH.lock().await.clone();
-        let content_path = store_path
-            .ok_or(Error::NoMatchingReferenceError)?
-            .join(&row.name);
+        let content_path = store_path.join(&row.name);
 
         hard_link(content_path.clone(), &target_file)
             .await
@@ -477,9 +539,7 @@ impl Treevarsable for RepoPath {
 
         let store_path = STORE_PATH.lock().await.clone();
 
-        let content_path = store_path
-            .ok_or(Error::NoMatchingReferenceError)?
-            .join(reference);
+        let content_path = store_path.join(reference);
 
         if content_path.exists() {
             return Ok(Tree::new(
