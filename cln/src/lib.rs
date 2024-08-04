@@ -11,7 +11,7 @@ use std::{
     os::unix::fs::PermissionsExt,
     path::{Path, PathBuf},
 };
-use tempfile::{Builder, TempDir};
+use tempfile::{Builder as TempBuilder, TempDir};
 use tokio::{
     fs::{create_dir_all, hard_link, read_to_string, write, File},
     process::Command,
@@ -31,16 +31,16 @@ use tokio::{
 /// #[tokio::main]
 /// async fn main() {
 ///     let path = Builder::new()
-///        .prefix("cln")
-///        .tempdir()
-///        .unwrap()
-///        .into_path();
+///         .prefix("cln")
+///         .tempdir()
+///         .unwrap()
+///         .into_path();
 ///
 ///     let store_path = Builder::new()
-///        .prefix("cln-store")
-///        .tempdir()
-///        .unwrap()
-///        .into_path();
+///         .prefix("cln-store")
+///         .tempdir()
+///         .unwrap()
+///         .into_path();
 ///
 ///     cln("https://github.com/yhakbar/cln.git", Some(path), None, Some(store_path)).await.unwrap();
 /// }
@@ -139,8 +139,92 @@ pub async fn cln(
     Ok(())
 }
 
+/// Using all those options can be cumbersome, so a builder is provided for a cleaner experience
+///
+/// ```rust
+/// use cln::Builder;
+/// use tempfile::Builder as TempBuilder;
+///
+/// #[tokio::main]
+/// async fn main() {
+///     let path = TempBuilder::new()
+///         .prefix("cln")
+///         .tempdir()
+///         .unwrap()
+///         .into_path();
+///
+///     let store_path = TempBuilder::new()
+///         .prefix("cln-store")
+///         .tempdir()
+///         .unwrap()
+///         .into_path();
+///
+///     Builder::new("https://github.com/yhakbar/cln.git")
+///         .dir(path)
+///         .store_path(store_path)
+///         .cln()
+///         .await
+///         .unwrap();
+/// }
+/// ```
+#[derive(Debug)]
+pub struct Builder {
+    repo: String,
+    dir: Option<PathBuf>,
+    branch: Option<String>,
+    store_path: Option<PathBuf>,
+}
+
+impl Builder {
+    #[must_use]
+    pub fn new(repo: &str) -> Self {
+        Self {
+            repo: repo.to_string(),
+            dir: None,
+            branch: None,
+            store_path: None,
+        }
+    }
+
+    #[must_use]
+    pub fn dir(mut self, dir: PathBuf) -> Self {
+        self.dir = Some(dir);
+        self
+    }
+
+    #[must_use]
+    pub fn branch(mut self, branch: &str) -> Self {
+        self.branch = Some(branch.to_string());
+        self
+    }
+
+    #[must_use]
+    pub fn store_path(mut self, store_path: PathBuf) -> Self {
+        self.store_path = Some(store_path);
+        self
+    }
+
+    /// # Errors
+    /// Will return an error if the repository cannot be clned.
+    /// This can happen if:
+    /// - The tempdir where the repository is cloned cannot be created.
+    /// - The git command to clone the repository into the tempdir fails.
+    /// - The new directory where the repository is copied to cannot be created.
+    /// - The temporary directory cannot be persisted to the cln-store.
+    /// - The hard links from the cln-store to the new directory fail.
+    pub async fn cln(self) -> Result<(), Error> {
+        cln(
+            &self.repo,
+            self.dir,
+            self.branch.as_deref(),
+            self.store_path,
+        )
+        .await
+    }
+}
+
 fn create_temp_dir() -> Result<TempDir, Error> {
-    let tempdir = Builder::new()
+    let tempdir = TempBuilder::new()
         .prefix("cln")
         .tempdir()
         .map_err(Error::TempDirError)?;
