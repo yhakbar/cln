@@ -1,5 +1,10 @@
+mod errors;
+mod store;
+
+pub use errors::Error;
+use store::{ensure_cln_store_path, is_content_stored, STORE_PATH};
+
 use async_trait::async_trait;
-use home::home_dir;
 use log::debug;
 use rayon::prelude::*;
 use std::{
@@ -7,7 +12,6 @@ use std::{
     path::{Path, PathBuf},
 };
 use tempfile::{Builder, TempDir};
-use thiserror::Error as ThisError;
 use tokio::{
     fs::{create_dir_all, hard_link, read_to_string, write, File},
     process::Command,
@@ -26,14 +30,19 @@ use tokio::{
 ///
 /// #[tokio::main]
 /// async fn main() {
-///     let tempdir = Builder::new()
+///     let path = Builder::new()
 ///        .prefix("cln")
 ///        .tempdir()
-///        .unwrap();
+///        .unwrap()
+///        .into_path();
 ///
-///     let path = tempdir.into_path();
+///     let store_path = Builder::new()
+///        .prefix("cln-store")
+///        .tempdir()
+///        .unwrap()
+///        .into_path();
 ///
-///     cln("https://github.com/yhakbar/cln.git", Some(path), None).await.unwrap();
+///     cln("https://github.com/yhakbar/cln.git", Some(path), None, Some(store_path)).await.unwrap();
 /// }
 /// ```
 ///
@@ -45,13 +54,20 @@ use tokio::{
 /// - The new directory where the repository is copied to cannot be created.
 /// - The temporary directory cannot be persisted to the cln-store.
 /// - The hard links from the cln-store to the new directory fail.
-pub async fn cln(repo: &str, dir: Option<PathBuf>, branch: Option<&str>) -> Result<(), Error> {
+pub async fn cln(
+    repo: &str,
+    dir: Option<PathBuf>,
+    branch: Option<&str>,
+    store_path: Option<PathBuf>,
+) -> Result<(), Error> {
+    ensure_cln_store_path(store_path).await?;
+
     let target_dir = dir.map_or_else(|| get_repo_name(repo), |dir| dir);
     let remote_ref = branch.as_ref().map_or(HEAD, |branch| branch);
     let ls_remote = run_ls_remote(repo, remote_ref).await?;
     let ls_remote_hash = ls_remote.get_hash()?;
 
-    if is_content_in_store(&ls_remote_hash).await? {
+    if is_content_stored(&ls_remote_hash).await? {
         let head_tree = Tree::from_hash(&ls_remote_hash, ".".to_string()).await?;
         if !&target_dir.exists() {
             create_dir_all(&target_dir)
@@ -85,38 +101,6 @@ pub async fn cln(repo: &str, dir: Option<PathBuf>, branch: Option<&str>) -> Resu
     tmp_dir.close().map_err(Error::TempDirCloseError)?;
 
     Ok(())
-}
-
-#[derive(ThisError, Debug)]
-pub enum Error {
-    #[error("Failed to create tempdir: {0}")]
-    TempDirError(std::io::Error),
-    #[error("Failed to close tempdir: {0}")]
-    TempDirCloseError(std::io::Error),
-    #[error("Failed to spawn git command: {0}")]
-    CommandSpawnError(std::io::Error),
-    #[error("Failed to complete git clone: {0}")]
-    GitCloneError(String),
-    #[error("Failed to parse git command output: {0}")]
-    Utf8Error(#[from] std::string::FromUtf8Error),
-    #[error("Failed to create cln-store directory: {0}")]
-    CreateDirError(std::io::Error),
-    #[error("Failed to find home directory")]
-    HomeDirError,
-    #[error("No matching reference found")]
-    NoMatchingReferenceError,
-    #[error("Failed to write {0} to cln-store: {1}")]
-    WriteToStoreError(String, std::io::Error),
-    #[error("Failed to create directory: {0}")]
-    CreateDirAllError(std::io::Error),
-    #[error("Failed to hard link: {0}")]
-    HardLinkError(std::io::Error),
-    #[error("Failed to read tree: {0}")]
-    ReadTreeError(std::io::Error),
-    #[error("Parse mode error: {0}")]
-    ParseModeError(std::num::ParseIntError),
-    #[error("Failed to read file {0}: {1}")]
-    ReadFileError(String, std::io::Error),
 }
 
 fn create_temp_dir() -> Result<TempDir, Error> {
@@ -155,20 +139,6 @@ async fn clone_repo(repo: &str, dir: &Path, branch: Option<&str>) -> Result<(), 
     }
 
     Ok(())
-}
-
-async fn get_cln_store_path() -> Result<String, Error> {
-    if let Some(homedir) = home_dir() {
-        let cln_store = homedir.join(".cln-store");
-        if !cln_store.exists() {
-            create_dir_all(&cln_store)
-                .await
-                .map_err(Error::CreateDirError)?;
-        }
-        Ok(cln_store.display().to_string())
-    } else {
-        Err(Error::HomeDirError)
-    }
 }
 
 struct LsRemoteRow {
@@ -226,13 +196,6 @@ async fn run_ls_remote(repo: &str, reference: &str) -> Result<LsRemote, Error> {
     Ok(LsRemote::new(stdout, reference))
 }
 
-async fn is_content_in_store(hash: &str) -> Result<bool, Error> {
-    let store_root = get_cln_store_path().await?;
-    let store_root_path = Path::new(&store_root);
-    let store_path = store_root_path.join(hash);
-    Ok(store_path.exists())
-}
-
 // Struct for parsing the rows of stdout from the `git ls-tree` command
 #[derive(Debug)]
 struct TreeRow {
@@ -266,22 +229,24 @@ impl TreeRow {
         }
     }
     async fn write_to_store(&self, repo_dir: &RepoPath) -> Result<(), Error> {
-        let store_root = get_cln_store_path().await?;
-        let store_root_path = Path::new(&store_root);
-        let store_path = store_root_path.join(&self.name);
+        let store_path = STORE_PATH.lock().await.clone();
 
-        if store_path.exists() {
+        let content_path = store_path
+            .ok_or(Error::NoMatchingReferenceError)?
+            .join(&self.name);
+
+        if content_path.exists() {
             return Ok(());
         }
 
-        File::create(&store_path)
+        File::create(&content_path)
             .await
-            .map_err(|e| Error::WriteToStoreError(store_path.to_string_lossy().to_string(), e))?;
+            .map_err(|e| Error::WriteToStoreError(content_path.to_string_lossy().to_string(), e))?;
 
         debug!(
             "Writing blob {} to store path {}",
             self.name,
-            store_path.display()
+            content_path.display()
         );
 
         let output = Command::new("git")
@@ -290,13 +255,13 @@ impl TreeRow {
             .output()
             .await
             .map_err(Error::CommandSpawnError)?;
-        write(&store_path, &output.stdout)
+        write(&content_path, &output.stdout)
             .await
-            .map_err(|e| Error::WriteToStoreError(store_path.to_string_lossy().to_string(), e))?;
+            .map_err(|e| Error::WriteToStoreError(content_path.to_string_lossy().to_string(), e))?;
         let mut stored_file_permissions =
             std::fs::Permissions::from_mode(self.mode.parse().map_err(Error::ParseModeError)?);
         stored_file_permissions.set_readonly(true);
-        File::open(&store_path)
+        File::open(&content_path)
             .await
             .map_err(Error::ReadTreeError)?
             .set_permissions(stored_file_permissions)
@@ -330,10 +295,12 @@ impl Tree {
         Ok(Self::new(tree, path))
     }
     async fn from_hash(hash: &str, path: String) -> Result<Self, Error> {
-        let store_root = get_cln_store_path().await?;
-        let store_root_path = Path::new(&store_root);
-        let store_path = store_root_path.join(hash);
-        Self::from_path(&store_path, path).await
+        let store_path = STORE_PATH.lock().await.clone();
+        let content_path = store_path
+            .ok_or(Error::NoMatchingReferenceError)?
+            .join(hash);
+
+        Self::from_path(&content_path, path).await
     }
 }
 
@@ -393,14 +360,19 @@ impl Walkable for RepoPath {
         if target_file.exists() {
             return Ok(());
         }
-        let store_path = PathBuf::from(get_cln_store_path().await?).join(&row.name);
-        hard_link(store_path.clone(), &target_file)
+
+        let store_path = STORE_PATH.lock().await.clone();
+        let content_path = store_path
+            .ok_or(Error::NoMatchingReferenceError)?
+            .join(&row.name);
+
+        hard_link(content_path.clone(), &target_file)
             .await
             .map_err(Error::HardLinkError)?;
 
         debug!(
             "Linked {} to {}",
-            store_path.display(),
+            content_path.display(),
             target_file.display()
         );
 
@@ -465,14 +437,19 @@ impl Walkable for Hash {
         if target_file.exists() {
             return Ok(());
         }
-        let store_path = PathBuf::from(get_cln_store_path().await?).join(&row.name);
-        hard_link(store_path.clone(), &target_file)
+
+        let store_path = STORE_PATH.lock().await.clone();
+        let content_path = store_path
+            .ok_or(Error::NoMatchingReferenceError)?
+            .join(&row.name);
+
+        hard_link(content_path.clone(), &target_file)
             .await
             .map_err(Error::HardLinkError)?;
 
         debug!(
             "Linked {} to {}",
-            store_path.display(),
+            content_path.display(),
             target_file.display()
         );
 
@@ -498,22 +475,24 @@ impl Treevarsable for RepoPath {
     async fn ls_tree(&self, reference: &str, path: String) -> Result<Tree, Error> {
         debug!("ls-tree: {}", reference);
 
-        let cln_store = get_cln_store_path().await?;
+        let store_path = STORE_PATH.lock().await.clone();
 
-        let store_path = Self::new(&cln_store).join(reference);
+        let content_path = store_path
+            .ok_or(Error::NoMatchingReferenceError)?
+            .join(reference);
 
-        if store_path.exists() {
+        if content_path.exists() {
             return Ok(Tree::new(
-                &read_to_string(&store_path)
+                &read_to_string(&content_path)
                     .await
                     .map_err(Error::ReadTreeError)?,
                 path,
             ));
         }
 
-        File::create(&store_path)
+        File::create(&content_path)
             .await
-            .map_err(|e| Error::WriteToStoreError(store_path.to_string_lossy().to_string(), e))?;
+            .map_err(|e| Error::WriteToStoreError(content_path.to_string_lossy().to_string(), e))?;
 
         let ls_tree_stdout = Command::new("git")
             .args(["ls-tree", reference])
@@ -525,11 +504,11 @@ impl Treevarsable for RepoPath {
         let ls_tree_string = String::from_utf8_lossy(&ls_tree_stdout);
         let ls_tree_trimmed = ls_tree_string.trim_end().to_string();
 
-        write(&store_path, &ls_tree_trimmed)
+        write(&content_path, &ls_tree_trimmed)
             .await
-            .map_err(|e| Error::WriteToStoreError(store_path.to_string_lossy().to_string(), e))?;
+            .map_err(|e| Error::WriteToStoreError(content_path.to_string_lossy().to_string(), e))?;
 
-        debug!("Wrote to store: {}", store_path.display());
+        debug!("Wrote to store: {}", content_path.display());
 
         Ok(Tree::new(&ls_tree_trimmed, path))
     }
@@ -552,14 +531,6 @@ mod tests {
         let tempdir = create_temp_dir().expect("Failed to create tempdir");
         assert!(tempdir.path().exists());
         tempdir.close().expect("Failed to close tempdir");
-    }
-
-    #[tokio::test]
-    async fn test_get_cln_store_path() {
-        let cln_store = get_cln_store_path()
-            .await
-            .expect("Failed to get cln-store path");
-        assert!(Path::new(&cln_store).exists());
     }
 
     #[tokio::test]

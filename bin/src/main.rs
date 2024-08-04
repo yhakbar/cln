@@ -30,7 +30,7 @@ async fn main() -> Result<(), Error> {
     let branch = args.branch;
     let repo = args.repo;
 
-    cln(&repo, dir, branch.as_deref()).await?;
+    cln(&repo, dir, branch.as_deref(), None).await?;
 
     Ok(())
 }
